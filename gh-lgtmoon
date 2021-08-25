@@ -1,0 +1,4 @@
+#!/bin/bash
+set -e
+
+curl -s 'https://lgtmoon.herokuapp.com/api/images/random' | jq '.images[0].url' | xargs -I URL echo '![LGTM](URL)' | pbcopy; pbpaste
