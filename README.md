@@ -8,7 +8,7 @@ GitHub CLI extension to retrieve LGTM images.
 gh extension install YuG1224/gh-lgtmoon
 ```
 
-The extension depends on jq.
+The extension depends on `jq` and is macOS-only because it uses `pbcopy` and `pbpaste`.
 ```sh
 brew install jq
 ```
