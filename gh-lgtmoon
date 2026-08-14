@@ -1,4 +1,143 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
 
-curl -s 'https://lgtmoon.herokuapp.com/api/images/random' | jq '.images[0].url' | xargs -I URL echo '![LGTM](URL)'
+extract_lgtm_url() {
+  local json rest url
+
+  json=$(cat)
+
+  rest=${json#*'"url"'}
+  if [ "$rest" = "$json" ]; then
+    return 1
+  fi
+
+  while case "$rest" in [$' \t\n\r']*) rest=${rest#?}; true ;; *) false ;; esac; do :; done
+
+  case "$rest" in
+    :*) rest=${rest#:} ;;
+    *) return 1 ;;
+  esac
+
+  while case "$rest" in [$' \t\n\r']*) rest=${rest#?}; true ;; *) false ;; esac; do :; done
+
+  case "$rest" in
+    \"*) rest=${rest#\"} ;;
+    *) return 1 ;;
+  esac
+
+  url=${rest%%\"*}
+  if [ -z "$url" ]; then
+    return 1
+  fi
+
+  printf '%s\n' "$url"
+}
+
+validate_https_url() {
+  local url=$1
+
+  if [ -z "$url" ]; then
+    return 1
+  fi
+
+  case "$url" in
+    https://*) ;;
+    *) return 1 ;;
+  esac
+
+  case "$url" in
+    *[$' \t\n\r']*|*[\"\'\<\>\\]*|*[\(]*|*[\)]*)
+      return 1
+      ;;
+  esac
+
+  return 0
+}
+
+read_proc_version() {
+  if [ -r /proc/version ]; then
+    printf '%s' "$(</proc/version)"
+  fi
+}
+
+is_windows_clipboard_host() {
+  case "${OSTYPE:-}" in
+    msys*|cygwin*|mingw*) return 0 ;;
+  esac
+  case "$(read_proc_version)" in
+    *[Mm]icrosoft*) return 0 ;;
+  esac
+  return 1
+}
+
+clipboard_copy() {
+  local markdown=$1
+  if command -v pbcopy >/dev/null 2>&1; then
+    printf '%s\n' "$markdown" | pbcopy 2>/dev/null && return 0
+  fi
+  if command -v clip.exe >/dev/null 2>&1 && is_windows_clipboard_host; then
+    printf '%s\n' "$markdown" | clip.exe 2>/dev/null && return 0
+  fi
+  if [ -n "${WAYLAND_DISPLAY:-}" ] && command -v wl-copy >/dev/null 2>&1; then
+    printf '%s\n' "$markdown" | wl-copy 2>/dev/null && return 0
+  fi
+  if [ -n "${DISPLAY:-}" ] && command -v xclip >/dev/null 2>&1; then
+    printf '%s\n' "$markdown" | xclip -selection clipboard 2>/dev/null && return 0
+  fi
+  if [ -n "${DISPLAY:-}" ] && command -v xsel >/dev/null 2>&1; then
+    printf '%s\n' "$markdown" | xsel --clipboard --input 2>/dev/null && return 0
+  fi
+  return 1
+}
+
+print_and_copy() {
+  printf '%s\n' "$1"
+  clipboard_copy "$1" || printf '%s\n' 'gh-lgtmoon: clipboard copy skipped' >&2
+}
+
+system_curl_path() {
+  # bash 3.2's `command -p` still searches PATH (Homebrew curl wins on macOS).
+  if [ -x /usr/bin/curl ]; then
+    printf '%s\n' /usr/bin/curl
+  fi
+}
+
+path_curl_path() {
+  command -v curl 2>/dev/null || true
+}
+
+curl_is_runnable() {
+  [ -n "$1" ] && "$1" --version >/dev/null 2>&1
+}
+
+resolve_curl() {
+  local candidate
+  candidate=$(system_curl_path)
+  if curl_is_runnable "$candidate"; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  candidate=$(path_curl_path)
+  if curl_is_runnable "$candidate"; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  printf '%s\n' 'gh-lgtmoon: curl not found' >&2
+  return 1
+}
+
+main() {
+  local curl_bin json url
+  curl_bin=$(resolve_curl) || exit 1
+  json=$("$curl_bin" -fsS --max-time 10 -- 'https://lgtmoon.dev/api/images/random') || exit $?
+  url=$(extract_lgtm_url <<EOF
+$json
+EOF
+) || { printf '%s\n' 'gh-lgtmoon: failed to extract image URL' >&2; exit 1; }
+  validate_https_url "$url" || { printf '%s\n' 'gh-lgtmoon: invalid image URL' >&2; exit 1; }
+  print_and_copy "$(printf '![LGTM](%s)' "$url")"
+}
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  set -euo pipefail
+  main "$@"
+fi
